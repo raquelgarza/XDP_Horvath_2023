@@ -1,20 +1,17 @@
----
-title: "The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease"
+# The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease
 author: Raquel Garza
-output: html_document
 date: "2023-10-11"
----
 
 This repository presents analyses for the manuscript
 [The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease]().
 
-# File tree
+## File tree
 - `src` - Directory containing all pipelines and scripts.
 - `src/config_files` - Json files required to run Snakefiles.
 - `src/r_scripts` - Directory containing helper functions and R markdowns for downstream analyses and visualization for the figures.
 - `tables/` - Directory containing tables with differential gene expression analysis and TLDR output.
 
-# Preprocessing pipelines 
+## Preprocessing pipelines 
 - `src` - Directory containing all pipelines and scripts
 - [**provider.pl**](./src/provider.pl) - Perl script for SNP analysis
 - [**Snakefile_RNAseq**](./src/Snakefile_RNAseq) - Snakemake for preprocessing of bulk RNAseq data.
@@ -28,7 +25,7 @@ This repository presents analyses for the manuscript
 - [**Snakefile_upreg_genes_nearby_SVAs**](./src/Snakefile_upreg_genes_nearby_SVAs) - Snakemake for calling methylation status over a list of regions using reference hg38 genome.
 - [**Snakefile_upreg_genes_nearby_SVAs_poly**](./src/Snakefile_upreg_genes_nearby_SVAs_poly) - Snakemake for calling methylation status over a list of regions using the custom genome (with the de novo TE insertions added to it).
 
-# Statistical and visualization scripts
+## Statistical and visualization scripts
 - `src/r_scripts` - Directory containing R markdowns for downstream analyses and visualization for the figures.
 	+ [**SNP_analysis.Rmd**](./src/r_scripts/SNP_analysis.Rmd) - R markdown for the visualization of the SNP analysis.
 	+ [**all_experiments_pcas_kds_taf1_clean.Rmd**](./src/r_scripts/all_experiments_pcas_kds_taf1_clean.Rmd) - Gene DEA.
