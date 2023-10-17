@@ -1,0 +1,550 @@
+---
+title: "Gene DEA"
+output: html_notebook
+author: Raquel Garza
+---
+
+## Some functions for visualization
+```{r class.source = 'fold-hide'}
+## getSignName ##
+# Get significantly different gene names. 
+# Taken from source code of the package deseqAbstraction which is no longer available on github.
+# Credits to Per L. Brattås
+# Parameters:
+# x = results object from deseq
+# p = padj threshold for significance
+# l = log2FC threshold for significance
+getSignName <- function(x,p,l=0) {
+  up <- x[!is.na(x$padj) & x$padj < p & x$log2FoldChange > l,]
+  down <- x[!is.na(x$padj) & x$padj < p & x$log2FoldChange < -l,]
+  return(list(up=rownames(up),down=rownames(down)))
+}
+## getAverage ##
+# Get average expression (normalized by median of ratios) of each of the conditions in a deseq object.
+# Taken from source code of the package deseqAbstraction which is no longer available on github.
+# Credits to Per L. Brattås
+# Parameters:
+# dds = deseq object
+getAverage <- function(dds) {
+  baseMeanPerLvl <- sapply( levels(dds$condition), function(lvl) rowMeans( counts(dds,normalized=TRUE)[,dds$condition == lvl] ) )
+  baseSDPerLvl <- sapply( levels(dds$condition), function(lvl) apply( counts(dds,normalized=TRUE)[,dds$condition == lvl],1,sd ) )
+  colnames(baseSDPerLvl) <- paste("st.dev:",colnames(baseSDPerLvl),sep="")
+  return(list(Mean=baseMeanPerLvl,SD=baseSDPerLvl))
+}
+
+meanPlot_cus <- function(exp,test,c1 = "condition 1",c2 = "condition 2",p=.05,l=0,id=F, ttl="", 
+                         repel=TRUE, col1="firebrick3", col2="steelblue4", col3="black", highlights=NA){
+  sign <- getSignName(x = test,p = p,l = l)
+  u <- sign$up
+  d <- sign$down
+  
+  #color up and down sign..
+  colVec <- ifelse(test = (rownames(exp) %in% u),
+                   yes = col1,
+                   no = ifelse(test = (rownames(exp) %in% d),
+                               yes = col2, no =col3))
+  colVec[is.na(colVec)] <- "steelblue" ## if NA make sure it's not counted as <p
+  #size of points
+  cexVec <- ifelse(test = (rownames(exp) %in% u),
+                   yes = 0.35,
+                   no = ifelse(test = (rownames(exp) %in% d),
+                               yes = 0.35, no = 0.3))
+  
+  exp_log <- as.data.frame(log2(exp[,c(c1, c2)]))
+  exp_log$Name <- rownames(exp_log)
+  
+  exp_log$reg <- factor(ifelse(exp_log$Name %in% u, paste('upregulated in ', c1, ' (', length(u), ')', sep =''),
+                               ifelse(exp_log$Name %in% d, paste('downregulated in ', c1,' (', length(d), ')', sep =''), paste('not significant', ' (', (nrow(test) - length(u) - length(d)), ')', sep=''))))
+  
+  library(ggrepel)
+  if(repel == TRUE){
+    plt <- ggplot(exp_log, aes(x=get(c2), y=get(c1), label=Name, color=reg)) + geom_point(aes(size=cexVec))+ scale_color_manual(values=c(col2, col3, col1))+ scale_size_continuous(range=c(1,2), guide="none")+ geom_text_repel(data = subset(exp_log, Name %in% u | Name %in% d),direction    = "y", nudge_y = 0.4, nudge_x = -0.5)
+  }
+  else{
+    plt <- ggplot(exp_log, aes(x=get(c2), y=get(c1), color=reg)) + geom_point(aes(size=cexVec))+ scale_color_manual(values=c(col2, col3, col1))+ scale_size_continuous(range=c(1,2), guide="none")
+  }
+  plt <- plt + labs(x=paste("log2(mean ",c2,")",sep=""), 
+                    y=paste("log2(mean ",c1,")",sep=""),
+                    title=paste(ttl, paste(c1," vs. ",c2,sep=""), sep = ': '),
+                    subtitle=paste("p-adj < ",p,", log2(fc) > ",l,sep=""))+theme(
+                      plot.title = element_text( size=14, face="bold"),  panel.grid.major = element_line(colour="white"),
+                      panel.grid.minor = element_line(colour="white"), panel.background = element_rect(fill = "white",
+                                                                                                       colour = "white",
+                                                                                                       size = 0.5, linetype = "solid"),
+                      axis.line = element_line(size = 0.5, linetype = "solid",
+                                               colour = "black"), 
+                      legend.title=element_blank()) 
+  
+  
+  if(id==T) {
+    
+    identify(log2(exp[,1]),log2(exp[,2]),labels = rownames(exp))
+    
+  }
+  
+  if(!is.na(highlights)){
+    plt <- plt + geom_point(data=exp_log[highlights,], aes(x=get(c2), y=get(c1)), colour="springgreen3", size=5, shape=1, stroke=2)
+  }
+  return(plt)
+  
+}
+```
+
+## Reading data and metadata
+
+Read files and create lists for the tests to be performed (one per experiment and per individual). 
+```{r}
+library(data.table)
+library(DESeq2)
+library(stringr)
+library(xlsx)
+library(pheatmap)
+library(UpSetR)
+library(ggplot2)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+gene_counts <- fread("/Volumes/MyPassport/xdp/gene_counts/default/gene_count_matrix_2.csv", data.table = F)
+colnames(gene_counts)[7:ncol(gene_counts)] <- sapply(str_split(colnames(gene_counts)[7:ncol(gene_counts)], "/"), `[[`, 8)
+rownames(gene_counts) <- gene_counts$Geneid
+
+# There was one sample mislabelled...
+colnames(gene_counts)[which(colnames(gene_counts) == "JOA5_ZF91g1D_S26")] <- "mislabelled"
+colnames(gene_counts)[which(colnames(gene_counts) == "JOA5_ZF91lacZD_S30")] <- "JOA5_ZF91g1D_S26"
+colnames(gene_counts)[which(colnames(gene_counts) == "mislabelled")] <- "JOA5_ZF91lacZD_S30"
+
+coldata <- read.xlsx("/Volumes/MyPassport/xdp/metadata.xlsx", sheetIndex = 1)
+rownames(coldata) <- coldata$sample
+
+gene_annotation <- fread("/Volumes/MyPassport/annotations/human/gencode/v38/gencode.v38.annotation.gene_names.tab", skip=1, header=F)
+colnames(gene_annotation) <- c("gene_id", "gene_name", "gene_type")
+
+coldata$cell_type_steps <- paste(coldata$cell_type_at_KD, coldata$cell_type, sep="_")
+coldata$gene_cell_type_steps <- paste(coldata$gene, coldata$cell_type_steps, sep="_")
+coldata$gene_cell_type_steps_dx <- paste(coldata$gene_cell_type_steps, coldata$dx, sep="_")
+
+experiment_individual_dds <- list()
+experiment_individual_res <- list()
+experiment_individual_res_df <- list()
+coldata_experiment_individuals <- split(coldata, f = paste(coldata$gene_cell_type_steps_dx, coldata$individual, sep="_"))
+coldata_experiment_individuals$ZNF91_iPSC_NES_Control_C1 <- rbind(coldata_experiment_individuals$ZNF91_iPSC_NES_Control_C1, coldata[which(coldata$gene_cell_type_steps_dx == "ZNF91_NES_NES_Control" & coldata$condition == "Control" & coldata$individual == "C1"),])
+```
+
+
+## DEA pooling diagnosis
+
+For assessing the changes in the different experiments, correcting for the individuals' diagnosis and the samples' batch if needed.
+```{r}
+coldata_experiments_dx <- split(coldata, f = coldata$gene_cell_type_steps_dx)
+coldata_experiments <- split(coldata, f = coldata$gene_cell_type_steps)
+# iPSC --> NES didnt have a control, so we are using the LZ from the same individual
+coldata_experiments$ZNF91_iPSC_NES <- rbind(coldata_experiments$ZNF91_iPSC_NES,
+                                            coldata_experiments$ZNF91_NES_NES[which(coldata_experiments$ZNF91_NES_NES$individual == "C1" & coldata_experiments$ZNF91_NES_NES$condition == "Control"),])
+coldata_experiments_dx$ZNF91_iPSC_NES_Control <- rbind(coldata_experiments_dx$ZNF91_iPSC_NES_Control,
+                                                   coldata_experiments_dx$ZNF91_NES_NES_Control[which(coldata_experiments_dx$ZNF91_NES_NES_Control$individual == "C1" & coldata_experiments_dx$ZNF91_NES_NES_Control$condition == "Control"),])
+for(experiment in names(coldata_experiments)) rownames(coldata_experiments[[experiment]]) <- coldata_experiments[[experiment]]$sample
+for(experiment in names(coldata_experiments_dx)) rownames(coldata_experiments_dx[[experiment]]) <- coldata_experiments_dx[[experiment]]$sample
+
+# Some experiments were sequenced in several sequencing runs. So we need to correct for batch effects in those..
+coldata_experiments_batch <- coldata_experiments[c("ZNF91_NES_NES", "TRIM28_NES_NES")]
+# Divided by diagnosis
+coldata_experiments_dx_batch <- coldata_experiments_dx[c("ZNF91_NES_NES_XDP", "ZNF91_NES_NES_Control", "TRIM28_NES_NES_XDP", "TRIM28_NES_NES_Control")]
+
+same_dx <- names(coldata_experiments)[which(names(coldata_experiments) %in% c("ZNF91_iPSC_iPSC", "ZNF91_iPSC_NES","ZNF91_fbNPC_fbNPC", "ZNF91_Neurons_Neurons"))]
+coldata_experiments_no_dx <- coldata_experiments[same_dx]
+coldata_experiments_dx_no_dx <- coldata_experiments_dx[c("ZNF91_iPSC_iPSC_Control", "ZNF91_iPSC_iPSC_XDP", "ZNF91_iPSC_NES_Control", "ZNF91_fbNPC_fbNPC_XDP", "ZNF91_Neurons_Neurons_XDP")]
+
+same_batch <- names(coldata_experiments)[which(!names(coldata_experiments) %in% c("ZNF91_NES_NES", "TRIM28_NES_NES", same_dx))]
+coldata_experiments_no_batch <- coldata_experiments[same_batch]
+coldata_experiments_dx_no_batch <- coldata_experiments_dx[c(paste(same_batch, "XDP", sep="_"), paste(same_batch, "Control", sep="_"))]
+
+experiment_dds <- list()
+experiment_res <- list()
+experiment_vst <- list()
+for(experiment in names(coldata_experiments_no_batch)) experiment_dds[[experiment]] <- DESeqDataSetFromMatrix(gene_counts[,rownames(coldata_experiments_no_batch[[experiment]])], coldata_experiments_no_batch[[experiment]], design =  ~ dx + condition)
+# Run DEA for experiments with possible batch effect
+for(experiment in names(coldata_experiments_batch)) experiment_dds[[experiment]] <- DESeqDataSetFromMatrix(gene_counts[,rownames(coldata_experiments_batch[[experiment]])], coldata_experiments_batch[[experiment]], design =  ~ dx + sequencing_run + condition)
+# Run DEA for experiments with same dx (we cant correct by sequencing run in the ZNF91 ipsc nes experiment. and the other two experiments in this category were sequenced in the same batch)
+for(experiment in names(coldata_experiments_no_dx)) experiment_dds[[experiment]] <- DESeqDataSetFromMatrix(gene_counts[,rownames(coldata_experiments_no_dx[[experiment]])], coldata_experiments_no_dx[[experiment]], design =  ~ condition)
+for(experiment in names(coldata_experiments)) experiment_dds[[experiment]]$condition <- relevel(experiment_dds[[experiment]]$condition, "Control")
+for(experiment in names(coldata_experiments)) experiment_dds[[experiment]] <- DESeq(experiment_dds[[experiment]])
+for(experiment in names(coldata_experiments)) experiment_res[[experiment]] <- lfcShrink(experiment_dds[[experiment]], "condition_KD_vs_Control")
+for(experiment in names(coldata_experiments)) experiment_vst[[experiment]] <- varianceStabilizingTransformation(experiment_dds[[experiment]])
+```
+
+## Evaluating the cis-regulatory effect of SVAs over nearby genes
+
+Using the log2FC of the gene DEA we just performed. Outputs a violin plot per experiment (log2FC in y-axis), grouping genes per distance to its nearest SVA (2kb, 5kb, 10kb, 15kb, 20kb, and 50kb) (x-axis).
+```{r}
+genes_tss_2kb_near_svas <- fread("/Volumes/MyPassport/xdp/genes_tss_around_2000bp_plus1kb_SVAs.bed", data.table = F, skip = 1)
+genes_tss_5kb_near_svas <- fread("/Volumes/MyPassport/xdp/genes_tss_around_5000bp_plus1kb_SVAs.bed", data.table = F, skip = 1)
+genes_tss_10kb_near_svas <- fread("/Volumes/MyPassport/xdp/genes_tss_around_10000bp_plus1kb_SVAs.bed", data.table = F, skip = 1)
+genes_tss_20kb_near_svas <- fread("/Volumes/MyPassport/xdp/genes_tss_around_20000bp_plus1kb_SVAs.bed", data.table = F, skip = 1)
+genes_tss_50kb_near_svas <- fread("/Volumes/MyPassport/xdp/genes_tss_around_50000bp_plus1kb_SVAs.bed", data.table = F, skip = 1)
+
+genes_tss_50kb_near_svas <- genes_tss_50kb_near_svas[which(!genes_tss_50kb_near_svas$V4 %in% genes_tss_20kb_near_svas$V4),]
+genes_tss_20kb_near_svas <- genes_tss_20kb_near_svas[which(!genes_tss_20kb_near_svas$V4 %in% genes_tss_10kb_near_svas$V4),]
+genes_tss_10kb_near_svas <- genes_tss_10kb_near_svas[which(!genes_tss_10kb_near_svas$V4 %in% genes_tss_5kb_near_svas$V4),]
+genes_tss_5kb_near_svas <- genes_tss_5kb_near_svas[which(!genes_tss_5kb_near_svas$V4 %in% genes_tss_2kb_near_svas$V4),]
+
+genes_tss_2kb_near_svas$distance <- "2kb"
+genes_tss_5kb_near_svas$distance <- "5kb"
+genes_tss_10kb_near_svas$distance <- "10kb"
+genes_tss_20kb_near_svas$distance <- "20kb"
+genes_tss_50kb_near_svas$distance <- "50kb"
+
+genes_tss_near_svas <- rbind(genes_tss_2kb_near_svas,
+                             genes_tss_5kb_near_svas,
+                             genes_tss_10kb_near_svas,
+                             genes_tss_20kb_near_svas,
+                             genes_tss_50kb_near_svas)
+
+colnames(genes_tss_near_svas) <- c("gene_chr", "gene_start", "gene_end", "gene_id", "dot", "gene_strand", "te_chr", "te_start", "te_end", "te_id", "dot2", "te_strand", "dot3", "te_id2", "te_score", "te_info", "overlap_w_window", "distance")
+
+genes_tss_near_svas$te_direction <- ifelse(genes_tss_near_svas$gene_strand == genes_tss_near_svas$te_strand, "sense", "antisense")
+
+dnmt1_nes_nes_gene_res_df <- as.data.frame(experiment_res$DNMT1_NES_NES)
+znf91_ipsc_ipsc_gene_res_df <- as.data.frame(experiment_res$ZNF91_iPSC_iPSC)
+znf91_ipsc_nes_gene_res_df <- as.data.frame(experiment_res$ZNF91_iPSC_NES)
+znf91_nes_nes_gene_res_df <- as.data.frame(experiment_res$ZNF91_NES_NES)
+dnmt1_znf91_nes_nes_gene_res_df <- as.data.frame(experiment_res$DNMT1_ZNF91_NES_NES)
+
+dnmt1_nes_nes_gene_res_df$experiment <- "DNMT1_NES_NES"
+znf91_ipsc_ipsc_gene_res_df$experiment <- "ZNF91_iPSC_iPSC"
+znf91_ipsc_nes_gene_res_df$experiment <- "ZNF91_iPSC_NES"
+znf91_nes_nes_gene_res_df$experiment <- "ZNF91_NES_NES"
+dnmt1_znf91_nes_nes_gene_res_df$experiment <- "DNMT1_ZNF91_NES_NES"
+
+dnmt1_nes_nes_gene_res_df$gene_id <- rownames(dnmt1_nes_nes_gene_res_df)
+znf91_ipsc_ipsc_gene_res_df$gene_id <- rownames(znf91_ipsc_ipsc_gene_res_df)
+znf91_ipsc_nes_gene_res_df$gene_id <- rownames(znf91_ipsc_nes_gene_res_df)
+znf91_nes_nes_gene_res_df$gene_id <- rownames(znf91_nes_nes_gene_res_df)
+dnmt1_znf91_nes_nes_gene_res_df$gene_id <- rownames(dnmt1_znf91_nes_nes_gene_res_df)
+gene_res_df <- rbind(dnmt1_nes_nes_gene_res_df,
+                     znf91_ipsc_ipsc_gene_res_df,
+                     znf91_ipsc_nes_gene_res_df,
+                     znf91_nes_nes_gene_res_df,
+                     dnmt1_znf91_nes_nes_gene_res_df)
+gene_res_df <- merge(gene_res_df, unique(genes_tss_near_svas[,c("gene_id", "distance", "te_direction")]), by="gene_id", all.x = T)
+
+gene_res_df_tss_nearby_SVA_melt <- reshape2::melt(gene_res_df[,c("experiment", "gene_id", "log2FoldChange", "distance", "te_direction")])
+gene_res_df_tss_nearby_SVA_melt$distance <- factor(gene_res_df_tss_nearby_SVA_melt$distance, levels = c("2kb", "5kb", "10kb", "20kb", "50kb"))
+gene_res_df_tss_nearby_SVA_melt <- gene_res_df_tss_nearby_SVA_melt[which(!is.na(gene_res_df_tss_nearby_SVA_melt$distance)),]
+
+gene_res_df_tss_nearby_SVA_melt$value_capped <- ifelse( gene_res_df_tss_nearby_SVA_melt$value > 1, 1, 
+                                                        ifelse(gene_res_df_tss_nearby_SVA_melt$value < -1, -1, gene_res_df_tss_nearby_SVA_melt$value))
+gene_res_df_tss_nearby_SVA_melt$flag <- ifelse(abs(gene_res_df_tss_nearby_SVA_melt$value) > 1, T, F)
+
+# pdf("/Volumes/MyPassport/xdp/results/plots/genes_nearby_SVAs_log2FC_pval_anova.pdf", height = 4)
+ggplot(gene_res_df_tss_nearby_SVA_melt, aes(x=distance, y=value)) + 
+  geom_violin(position = position_dodge(0.9)) + geom_boxplot(width = 0.2, coef = 10000000, position = position_dodge(0.9)) + theme_classic() + 
+  facet_wrap(.~experiment, ncol=5) + labs(x="", y="log2FoldChange", fill="") + 
+  geom_hline(yintercept = 0, linetype = "dashed", colour="red") + 
+  stat_compare_means()+
+  theme(text = element_text(size = 20), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+ggplot(gene_res_df_tss_nearby_SVA_melt, aes(x=distance, y=value)) + 
+  geom_violin(position = position_dodge(0.9)) + geom_boxplot(width = 0.2, coef = 10000000, position = position_dodge(0.9)) + theme_classic() + 
+  facet_wrap(.~experiment, ncol=5) + labs(x="", y="log2FoldChange", fill="") + 
+  geom_hline(yintercept = 0, linetype = "dashed", colour="red") + 
+  stat_compare_means(label.y = 1)+
+  theme(text = element_text(size = 20), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + coord_cartesian(ylim=c(-1,1)) +
+  geom_jitter(data = subset(gene_res_df_tss_nearby_SVA_melt, flag), # points outside the limits (red)
+             aes(x = distance, y = value_capped), # make sure to use x2 here
+             colour = "indianred", height = 0, width = 0.2, shape=4) 
+# dev.off()
+
+```
+
+## Cell fate
+
+Relevant markers for characterizing the different cell identities used in these experiments.
+```{r}
+annotation <- fread("/Volumes/MyPassport/annotations/human/gencode/v38/gencode.v38.annotation.gene_names.tab", skip=1, header = F)
+colnames(annotation) <- c("gene_id", "gene_name", "gene_type") 
+
+pluripotency <- c("NANOG", "POU5F1", "KLF4", "MYC", "LIN28A")
+forebrain <- c("FOXG1", "OTX2", "PAX6", "EMX2", "DLX2")
+mid_hind_brain <- c("OTX1", "EN1", "LMX1A", "CORIN", "FOXA2", "PAX8", "HOXA2")
+neural_lineage <- c("SOX2", "TUBB", "DCX", "TBR1", "EOMES", "CUX2", "OLIG2", "GFAP", "EMX1" )
+nes <- c("NES", "SOX1", "SOX2", "PAX6", "ASCL1", "FOXG1", "POU3F2", "DCX", "NCAM1", "MAP2" )
+
+experiment_vst_df <- list()
+for(experiment in names(coldata_experiments)) experiment_vst_df[[experiment]] <- as.data.frame(assay(experiment_vst[[experiment]]))
+for(experiment in names(coldata_experiments)) experiment_vst_df[[experiment]] <- merge(experiment_vst_df[[experiment]], unique(annotation[,c("gene_id", "gene_name")]), by.x="row.names", by.y="gene_id")
+
+biomarkers_count_norm <- list()
+for(experiment in names(coldata_experiments)) biomarkers_count_norm[[experiment]] <- experiment_vst_df[[experiment]][which(experiment_vst_df[[experiment]]$gene_name %in% pluripotency | 
+                                                                                                                         experiment_vst_df[[experiment]]$gene_name %in% forebrain |
+                                                                                                                         experiment_vst_df[[experiment]]$gene_name %in% mid_hind_brain |
+                                                                                                                         experiment_vst_df[[experiment]]$gene_name %in% neural_lineage |
+                                                                                                                           experiment_vst_df[[experiment]]$gene_name %in% nes ), c("gene_name", coldata_experiments[[experiment]]$sample)]
+for(experiment in names(coldata_experiments)) rownames(biomarkers_count_norm[[experiment]]) <- biomarkers_count_norm[[experiment]]$gene_name
+for(experiment in names(coldata_experiments)) biomarkers_count_norm[[experiment]] <- biomarkers_count_norm[[experiment]][,-1]
+for(experiment in names(coldata_experiments)) biomarkers_count_norm[[experiment]] <- biomarkers_count_norm[[experiment]][c(pluripotency, nes, forebrain, mid_hind_brain, neural_lineage),]
+for(experiment in names(coldata_experiments)) coldata_experiments[[experiment]] <- coldata_experiments[[experiment]][order(coldata_experiments[[experiment]]$condition),]
+
+col.pal <- RColorBrewer::brewer.pal(9, "YlGnBu")
+# pdf("/Volumes/MyPassport/xdp/manuscript/figures/plots/April2023/cellidentity_experiments.pdf", height = 7, width = 5)
+pheatmap(biomarkers_count_norm$DNMT1_NES_NES[c(pluripotency, nes),rownames(coldata_experiments$DNMT1_NES_NES)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$DNMT1_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "DNMT1 KO (NES)")
+pheatmap(biomarkers_count_norm$DNMT1_ZNF91_NES_NES[c(pluripotency, nes),rownames(coldata_experiments$DNMT1_ZNF91_NES_NES)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$DNMT1_ZNF91_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "DNMT1+ZNF91 KD (NES)")
+pheatmap(biomarkers_count_norm$TRIM28_NES_NES[c(pluripotency, nes),rownames(coldata_experiments$TRIM28_NES_NES)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$TRIM28_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "TRIM28 KD (NES)")
+pheatmap(biomarkers_count_norm$ZNF91_iPSC_iPSC[c(pluripotency, nes),rownames(coldata_experiments$ZNF91_iPSC_iPSC)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$ZNF91_iPSC_iPSC[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "ZNF91 KD (iPSC)")
+pheatmap(biomarkers_count_norm$ZNF91_iPSC_NES[c(pluripotency, nes),rownames(coldata_experiments$ZNF91_iPSC_NES)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$ZNF91_iPSC_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "ZNF91 KD (iPSC --> NES)")
+pheatmap(biomarkers_count_norm$ZNF91_NES_NES[c(pluripotency, nes),rownames(coldata_experiments$ZNF91_NES_NES)], cluster_rows = F, cluster_cols = F, gaps_row = c(5), 
+         annotation_col = coldata_experiments$ZNF91_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "ZNF91 KD (NES)")
+pheatmap(biomarkers_count_norm$ZNF91_Neurons_Neurons[,rownames(coldata_experiments$ZNF91_Neurons_Neurons)], cluster_rows = F, cluster_cols = F, gaps_row = c(5, 15, 20, 27), 
+         annotation_col = coldata_experiments$ZNF91_Neurons_Neurons[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "ZNF91 KD (Neurons)")
+# dev.off()
+```
+
+## Expression (vst values) of CRISPRi genes 
+
+Target genes' expression on the different CRISPRi experiments.
+```{r}
+kds <- c("DNMT1", "ZNF91", "TRIM28")
+
+kds_count_norm <- list()
+for(experiment in names(coldata_experiments)) kds_count_norm[[experiment]] <- experiment_vst_df[[experiment]][which(experiment_vst_df[[experiment]]$gene_name %in% kds), c("gene_name", coldata_experiments[[experiment]]$sample)]
+for(experiment in names(coldata_experiments)) rownames(kds_count_norm[[experiment]]) <- kds_count_norm[[experiment]]$gene_name
+for(experiment in names(coldata_experiments)) kds_count_norm[[experiment]] <- kds_count_norm[[experiment]][,-1]
+for(experiment in names(coldata_experiments)) kds_count_norm[[experiment]] <- kds_count_norm[[experiment]][c(kds),]
+for(experiment in names(coldata_experiments)) kds_count_norm[[experiment]]$gene_kd <- rownames(kds_count_norm[[experiment]])
+kds_count_norm_melt <- list()
+for(experiment in names(coldata_experiments)) kds_count_norm_melt[[experiment]] <- reshape2::melt(kds_count_norm[[experiment]][c(kds), c("gene_kd", rownames(coldata_experiments[[experiment]]))], "gene_kd")
+for(experiment in names(coldata_experiments)) kds_count_norm_melt[[experiment]] <- merge(coldata_experiments[[experiment]], kds_count_norm_melt[[experiment]], by.x="sample", by.y = "variable")
+
+# pdf("/Volumes/MyPassport/xdp/manuscript/figures/plots/April2023/kds_experiments.pdf", height = 2.5, width = 5)
+pheatmap(kds_count_norm$DNMT1_NES_NES[c(kds),rownames(coldata_experiments$DNMT1_NES_NES)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$DNMT1_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "DNMT1 KO (NES)")
+pheatmap(kds_count_norm$DNMT1_ZNF91_NES_NES[c(kds),rownames(coldata_experiments$DNMT1_ZNF91_NES_NES)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$DNMT1_ZNF91_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = F, main = "DNMT1+ZNF91 KD (NES)")
+pheatmap(kds_count_norm$TRIM28_NES_NES[c(kds),rownames(coldata_experiments$TRIM28_NES_NES)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$TRIM28_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = F, main = "TRIM28 KD (NES)")
+pheatmap(kds_count_norm$ZNF91_iPSC_iPSC[c(kds),rownames(coldata_experiments$ZNF91_iPSC_iPSC)], cluster_rows = F, cluster_cols = F,
+         annotation_col = coldata_experiments$ZNF91_iPSC_iPSC[,c("condition"), drop=F], color = col.pal, show_colnames = F, main = "ZNF91 KD (iPSC)")
+pheatmap(kds_count_norm$ZNF91_iPSC_NES[c(kds),rownames(coldata_experiments$ZNF91_iPSC_NES)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$ZNF91_iPSC_NES[,c("condition"), drop=F], color = col.pal, show_colnames = T, main = "ZNF91 KD (iPSC --> NES)")
+pheatmap(kds_count_norm$ZNF91_NES_NES[c(kds),rownames(coldata_experiments$ZNF91_NES_NES)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$ZNF91_NES_NES[,c("condition"), drop=F], color = col.pal, show_colnames = F, main = "ZNF91 KD (NES)")
+pheatmap(kds_count_norm$ZNF91_Neurons_Neurons[c(kds),rownames(coldata_experiments$ZNF91_Neurons_Neurons)], cluster_rows = F, cluster_cols = F, 
+         annotation_col = coldata_experiments$ZNF91_Neurons_Neurons[,c("condition"), drop=F], color = col.pal, show_colnames = F, main = "ZNF91 KD (Neurons)")
+# dev.off()
+```
+
+## Gene DEA per individual
+
+As we have fairly big differences between individuals, we will perform gene DEA per individual.
+
+### Adding TAF1 intron 32 to the list
+```{r}
+intron32_count <- fread('/Volumes/MyPassport/xdp/gene_counts/unique/intron32_count_matrix_2.csv', data.table = F)
+rownames(intron32_count) <- "TAF1_intron32_chrX:71424238-71454170"
+colnames(intron32_count)[7:ncol(intron32_count)] <- sapply(str_split(colnames(intron32_count)[7:ncol(intron32_count)], '/'), `[[`, 8)
+
+colnames(intron32_count)[which(colnames(intron32_count) == "JOA5_ZF91g1D_S26")] <- "mislabelled"
+colnames(intron32_count)[which(colnames(intron32_count) == "JOA5_ZF91lacZD_S30")] <- "JOA5_ZF91g1D_S26"
+colnames(intron32_count)[which(colnames(intron32_count) == "mislabelled")] <- "JOA5_ZF91lacZD_S30"
+
+gene_counts_intron32 <- rbind(intron32_count, gene_counts)
+```
+
+### Adding TAF1 exon 38 to the list
+```{r}
+exon_count <- fread('/Volumes/MyPassport/xdp/gene_counts/default/exon_count_matrix_2.csv', data.table = F)
+exon_count$Geneid <- paste(exon_count$Geneid, paste(exon_count$Chr, paste(exon_count$Start, exon_count$End, sep="-"), sep=":"), sep="_")
+exon_count <- unique(exon_count)
+rownames(exon_count) <- exon_count$Geneid
+colnames(exon_count)[7:ncol(exon_count)] <- sapply(str_split(colnames(exon_count)[7:ncol(exon_count)], '/'), `[[`, 8)
+
+colnames(exon_count)[which(colnames(exon_count) == "JOA5_ZF91g1D_S26")] <- "mislabelled"
+colnames(exon_count)[which(colnames(exon_count) == "JOA5_ZF91lacZD_S30")] <- "JOA5_ZF91g1D_S26"
+colnames(exon_count)[which(colnames(exon_count) == "mislabelled")] <- "JOA5_ZF91lacZD_S30"
+
+exons_taf1 <- fread("/Volumes/MyPassport/xdp/data/TAF1_exons_ids.tab", data.table = F, header=F)
+exons_taf1$exon_id <- sapply(str_split(exons_taf1$V1, "_"), `[[`, 1)
+exons_taf1$start <- sapply(str_split(sapply(str_split(sapply(str_split(exons_taf1$V1, "_"), `[[`, 2), "chrX:"), `[[`, 2), "-"), `[[`, 1)
+exons_taf1$end <- sapply(str_split(sapply(str_split(sapply(str_split(exons_taf1$V1, "_"), `[[`, 2), "chrX:"), `[[`, 2), "-"), `[[`, 2)
+exons_taf1$exon_number <- 1:nrow(exons_taf1)
+exon38 <- exons_taf1[which(exons_taf1$exon_number == 38),"V1"]
+# exon_count[exon38, ]
+gene_counts_intron32_exon38 <- rbind(exon_count[exon38, ], gene_counts_intron32)
+```
+
+### Gene DEA per individual
+```{r}
+for(experiment_individual in names(coldata_experiment_individuals)) {
+  experiment_individual_dds[[experiment_individual]] <- DESeqDataSetFromMatrix(gene_counts_intron32_exon38[,rownames(coldata_experiment_individuals[[experiment_individual]])], coldata_experiment_individuals[[experiment_individual]], design =  ~ condition)
+  experiment_individual_dds[[experiment_individual]]$condition <- relevel(experiment_individual_dds[[experiment_individual]]$condition, "Control")
+  experiment_individual_dds[[experiment_individual]] <- DESeq(experiment_individual_dds[[experiment_individual]])
+  experiment_individual_res[[experiment_individual]] <- lfcShrink(experiment_individual_dds[[experiment_individual]], "condition_KD_vs_Control")
+  experiment_individual_res_df[[experiment_individual]] <- merge(as.data.frame(experiment_individual_res[[experiment_individual]]), annotation, by.x="row.names", by.y="gene_id", all.x=T)
+} 
+experiment_individual_res$DNMT1_NES_NES_XDP_X1[which(startsWith(rownames(experiment_individual_res$DNMT1_NES_NES_XDP_X1), "TAF1") ),]
+experiment_individual_res$DNMT1_ZNF91_NES_NES_XDP_X1[which(startsWith(rownames(experiment_individual_res$DNMT1_ZNF91_NES_NES_XDP_X1), "TAF1") ),]
+```
+
+## Target gene expression (TPM) - per individual!
+
+Padj extracted from the tests we just performed in the previous chunk. Counts normalized by TPM.
+```{r}
+gene_lengths <- gene_counts_intron32_exon38[,"Length"] 
+# mapped_reads <- colSums(gene_counts_intron32_exon38[,rownames(coldata)]) #Total mapped reads per sample
+gene_counts_mtx <- as.matrix(gene_counts_intron32_exon38[,rownames(coldata)])
+
+tpm <- function(counts,len) {
+  x <- counts/len
+  return(t(t(x)*1e6/colSums(x)))
+}
+
+gene_tpm <- as.data.frame(tpm(gene_counts_mtx, gene_lengths))
+gene_tpm <- merge(gene_tpm, unique(annotation[,c("gene_id", "gene_name")]), by.x="row.names", by.y="gene_id", all.x=T)
+gene_tpm[which(startsWith(gene_tpm$Row.names, "TAF1")),"gene_name"] <- "TAF1_intron32"
+gene_tpm[which(startsWith(gene_tpm$Row.names, "ENSE00001942720.1")),"gene_name"] <- "TAF1_exon38"
+
+for(experiment_individual in names(coldata_experiment_individuals)){
+    experiment_individual_res_df[[experiment_individual]][which(startsWith(as.character(experiment_individual_res_df[[experiment_individual]]$Row.names), "TAF1")),"gene_name"] <- "TAF1_intron32"
+    experiment_individual_res_df[[experiment_individual]][which(startsWith(as.character(experiment_individual_res_df[[experiment_individual]]$Row.names), "ENSE00001942720.1")),"gene_name"] <- "TAF1_exon38"
+} 
+
+
+rownames(gene_tpm) <- make.unique(gene_tpm$gene_name)
+# intron32 <- rownames(intron32_count)
+genes_interest <- c("TRIM28", "ZNF91", "DNMT1", "TAF1", "TAF1_intron32", "TAF1_exon38", "SULT1B1", "HORMAD1")
+genes_interest_count_tpm_melt <- reshape2::melt(gene_tpm[c(genes_interest), -1], "gene_name")
+genes_interest_count_tpm_melt <- merge(coldata, genes_interest_count_tpm_melt, by.x="sample", by.y = "variable")
+library(ggpubr)
+plots_genes_interest <- list()
+for(gene in genes_interest){
+  df <- genes_interest_count_tpm_melt[which(genes_interest_count_tpm_melt$gene_name == gene),]
+  df_split <- split(df, f = paste(df$gene_cell_type_steps_dx, df$individual, sep="_"))
+  plots_genes_interest[[gene]] <- list()
+  
+  ylims_max <- max(df$value) + sd(df$value)*1.5
+  pvalue_position <- max(df$value) + (sd(df$value)/2)
+  
+  for(experiment_individual in names(coldata_experiment_individuals)[-19]){
+    individual <- unique(df_split[[experiment_individual]]$individual)
+    if(experiment_individual == "ZNF91_iPSC_NES_Control_C1"){
+      tmp <- df_split$ZNF91_NES_NES_Control_C1[which(df_split$ZNF91_NES_NES_Control_C1$condition == "Control"),]
+      tmp$gene_cell_type_steps_dx <- "ZNF91_iPSC_NES_Control"
+      df_split$ZNF91_iPSC_NES_Control_C1 <- rbind(df_split$ZNF91_iPSC_NES_Control_C1, tmp)
+    }
+    
+    gene_padj <- experiment_individual_res_df[[experiment_individual]][which(experiment_individual_res_df[[experiment_individual]]$gene_name == gene),]
+    gene_padj <- format(gene_padj$padj, digits = 3, scientific = T)
+    gene_padj <- as.data.frame(t(as.matrix(c("Control", "KD", gene_padj))))
+    colnames(gene_padj) <- c("group1", "group2", "p.value")
+    plots_genes_interest[[gene]][[experiment_individual]] <- ggplot(df_split[[experiment_individual]], aes(x=condition, y=value)) + 
+      ggtitle(experiment_individual) +
+      stat_summary(fun = mean,
+                   geom = "errorbar",
+                   fun.max = function(x) mean(x) + sd(x) / sqrt(length(x)),
+                   fun.min = function(x) mean(x) - sd(x) / sqrt(length(x)),
+                   width = 0.2, colour="black") +
+      stat_summary(fun=mean, position=position_dodge(), geom="bar", width = 0.5) + 
+      geom_jitter(position=position_jitter(width=0.1, height = 0), colour="black", alpha=0.3) +
+      theme_classic() + labs(y="TPM", x="") + # facet_wrap(.~gene_cell_type_steps_dx, scales = "free_y") +
+      stat_pvalue_manual(gene_padj, y.position = pvalue_position, label = "p.value") +
+      theme(plot.title = element_text(size = 10, face = "bold")) +  lims(y=c(0,ylims_max))
+  }
+}
+
+# pdf("/Volumes/MyPassport/xdp/results/plots/genes_interest_bar_tpm_same_scale.pdf", width = 10, height = 10)
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$ZNF91), top = "ZNF91")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$DNMT1), top = "DNMT1")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$TRIM28), top = "TRIM28")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$TAF1_intron32), top = "TAF1_intron32")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$TAF1_exon38), top = "TAF1_exon38")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$TAF1), top = "TAF1 (complete)")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$HORMAD1), top = "HORMAD1")
+annotate_figure(p = ggarrange(plotlist = plots_genes_interest$SULT1B1), top = "SULT1B1")
+# dev.off()
+```
+
+## LacZ TAF1 expression
+
+As a baseline of expression for intron 32 and exon 38.
+```{r}
+coldata_znf91_nes_lacz <- coldata[which(coldata$gene_cell_type_steps == "ZNF91_NES_NES" & coldata$condition == "Control"),]
+znf91_nes_lacz_dds <- DESeqDataSetFromMatrix(gene_counts_intron32_exon38[,rownames(coldata_znf91_nes_lacz)], coldata_znf91_nes_lacz, design =  ~ sequencing_run + dx)
+znf91_nes_lacz_dds$dx <- relevel(znf91_nes_lacz_dds$dx, "Control")
+znf91_nes_lacz_dds <- DESeq(znf91_nes_lacz_dds)
+znf91_nes_lacz_res <- lfcShrink(znf91_nes_lacz_dds, "dx_XDP_vs_Control")
+
+znf91_nes_lacz_res_df <- as.data.frame(znf91_nes_lacz_res)
+znf91_nes_lacz_res_df$gene_id <- rownames(znf91_nes_lacz_res_df)
+znf91_nes_lacz_res_df <- merge(znf91_nes_lacz_res_df, gene_annotation, by="gene_id", all.x=T)
+znf91_nes_lacz_res_df[which(startsWith(znf91_nes_lacz_res_df$gene_id, "ENSE00001942720.1_chrX")), "gene_name"] <- "TAF1_exon38"
+znf91_nes_lacz_res_df[which(startsWith(znf91_nes_lacz_res_df$gene_id, "TAF1")), "gene_name"] <- "TAF1_intron32"
+
+# TAF1 using tpms 
+taf1_count_tpm_melt <- reshape2::melt(gene_tpm["TAF1_exon38", -1], "gene_name")
+taf1_count_tpm_melt <- merge(coldata, taf1_count_tpm_melt, by.x="sample", by.y = "variable")
+
+one_per_individual <- coldata_znf91_nes_lacz[which(!duplicated(coldata_znf91_nes_lacz$individual)), "sample"]
+
+df <- taf1_count_tpm_melt[which(taf1_count_tpm_melt$gene_name == "TAF1_exon38" & taf1_count_tpm_melt$sample %in% one_per_individual), ]
+df <- df[which(df$condition == "Control" & df$gene_cell_type_steps == "ZNF91_NES_NES"),]
+gene_padj <- znf91_nes_lacz_res_df[which(znf91_nes_lacz_res_df$gene_name == "TAF1_exon38"),]
+gene_padj <- format(gene_padj$padj, digits = 3, scientific = T)
+gene_padj <- as.data.frame(t(as.matrix(c("Control", "XDP", gene_padj))))
+colnames(gene_padj) <- c("group1", "group2", "p.value")
+
+# pdf("/Volumes/MyPassport/xdp/manuscript/figures/plots/taf1_exon38_bar_tpm_one_per_indiv.pdf", width = 3, height =4 )
+ggplot(df, aes(x=dx, y=value)) + 
+    stat_summary(fun = mean,
+                 geom = "errorbar",
+                 fun.max = function(x) mean(x) + sd(x) / sqrt(length(x)),
+                 fun.min = function(x) mean(x) - sd(x) / sqrt(length(x)),
+                 width = 0.2, colour="black") +
+    stat_summary(fun.y=mean, position=position_dodge(width=0.95), geom="bar", aes(width = 0.5)) + 
+    geom_jitter(colour="black", alpha=0.3, width = 0.2, height = 0) +
+    theme_classic() + labs(y="TPM", x="") + # facet_wrap(.~gene_cell_type_steps_dx, scales = "free_y") +
+    stat_pvalue_manual(gene_padj, y.position = max(df$value) + sd(df$value), label = "p.value") + 
+    theme(plot.title = element_text(size = 10, face = "bold")) + 
+  ggtitle("TAF1 exon 38")
+# dev.off()
+
+taf1_count_tpm_melt <- reshape2::melt(gene_tpm["TAF1_intron32", -1], "gene_name")
+taf1_count_tpm_melt <- merge(coldata, taf1_count_tpm_melt, by.x="sample", by.y = "variable")
+df <- taf1_count_tpm_melt[which(taf1_count_tpm_melt$gene_name == "TAF1_intron32" & taf1_count_tpm_melt$sample %in% one_per_individual), ]
+df <- df[which(df$condition == "Control" & df$gene_cell_type_steps == "ZNF91_NES_NES"),]
+gene_padj <- znf91_nes_lacz_res_df[which(znf91_nes_lacz_res_df$gene_name == "TAF1_intron32"),]
+gene_padj <- format(gene_padj$padj, digits = 3, scientific = T)
+gene_padj <- as.data.frame(t(as.matrix(c("Control", "XDP", gene_padj))))
+colnames(gene_padj) <- c("group1", "group2", "p.value")
+
+# pdf("/Volumes/MyPassport/xdp/manuscript/figures/plots/taf1_intron32_bar_tpm_one_per_indiv.pdf", width = 3, height =4 )
+ggplot(df, aes(x=dx, y=value)) + 
+    stat_summary(fun = mean,
+                 geom = "errorbar",
+                 fun.max = function(x) mean(x) + sd(x) / sqrt(length(x)),
+                 fun.min = function(x) mean(x) - sd(x) / sqrt(length(x)),
+                 width = 0.2, colour="black") +
+    stat_summary(fun.y=mean, position=position_dodge(width=0.95), geom="bar", aes(width = 0.5)) + 
+    geom_jitter(colour="black", alpha=0.3, width = 0.2, height = 0) +
+    theme_classic() + labs(y="TPM", x="") + # facet_wrap(.~gene_cell_type_steps_dx, scales = "free_y") +
+    stat_pvalue_manual(gene_padj, y.position = max(df$value) + sd(df$value), label = "p.value") + 
+    theme(plot.title = element_text(size = 10, face = "bold")) + 
+  ggtitle("TAF1 intron 32")
+# dev.off()
+```
+
+## Gene DEA for ZNF91 CRISPRi (pooling all individuals)
+```{r}
+gene_experiment_exp_znf91_nes_nes <- getAverage(experiment_dds$ZNF91_NES_NES)
+gene_experiment_exp_znf91_nes_nes$Mean <- merge(gene_experiment_exp_znf91_nes_nes$Mean, annotation[,c("gene_id", "gene_name")], by.x="row.names", by.y="gene_id")
+rownames(gene_experiment_exp_znf91_nes_nes$Mean) <- make.unique(gene_experiment_exp_znf91_nes_nes$Mean$gene_name)
+gene_experiment_exp_znf91_nes_nes$Mean$gene_name <- rownames(gene_experiment_exp_znf91_nes_nes$Mean)
+znf91_nes_nes_gene_res_df <- merge(znf91_nes_nes_gene_res_df, gene_experiment_exp_znf91_nes_nes$Mean[,c("Row.names", "gene_name")], by.x="gene_id", by.y="Row.names")
+rownames(znf91_nes_nes_gene_res_df) <- znf91_nes_nes_gene_res_df$gene_name
+# pdf("/Volumes/MyPassport/xdp/manuscript/figures/plots/mean_plot_genes.pdf", width = 27, height = 25)
+meanPlot_cus(gene_experiment_exp_znf91_nes_nes$Mean, test=znf91_nes_nes_gene_res_df, l=0, repel = T, p=0.05, c1='KD', c2='Control',ttl='Gene DEA - ZNF91')
+# dev.off()
+```
+
