@@ -1,0 +1,54 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(data.table)
+genotypes <- fread("/Volumes/MyPassport/xdp/SNP_Analysis/SNPs.genotypes", data.table = F)
+metadata <- fread("/Volumes/MyPassport/xdp/SNP_Analysis/SampleInformation_SNP_Analysis.tab", fill=T, data.table = F, header = F)[,-1]
+colnames(metadata) <- c("sample", "individual", "sex")
+metadata[1:8,"sex"] <- sapply(str_split(metadata[1:8,"individual"], "      "), `[[`, 2)
+metadata[1:8,"individual"] <- sapply(str_split(metadata[1:8,"individual"], "      "), `[[`, 1)
+
+rownames(genotypes) <- genotypes$loc
+genotypes <- genotypes[,-1]
+
+# merge(metadata, data.frame(genotype = apply(genotypes, 2, paste, collapse="_")), by.x="sample", by.y="row.names")
+
+genotypes[is.na(genotypes)] <- "X"
+
+similarity <- as.data.frame(matrix(NA, nrow = length(colnames(genotypes)), ncol = length(colnames(genotypes))))
+colnames(similarity) <- colnames(genotypes)
+rownames(similarity) <- colnames(genotypes)
+
+for(i in rownames(similarity)){
+  for(j in colnames(similarity)){
+    similarity[i,j] <- round(100*with(genotypes, mean(ifelse(genotypes[,i] == genotypes[,j], 1, 0))), digits = 3)
+  }
+}
+
+rownames(metadata) <- metadata$sample
+metadata$dx <- ifelse(startsWith(metadata$individual, "X"), "XDP", "Healthy")
+metadata <- metadata[order(metadata$dx),]
+metadata <- metadata[order(metadata$individual),]
+similarity <- similarity[metadata$sample, metadata$sample]
+similarity[upper.tri(similarity, diag=FALSE)] <- NA
+
+
+library(pheatmap)
+pdf("/Volumes/MyPassport/xdp/SNP_Analysis/SNP_no_names.pdf", height = 7, width = 7)
+pheatmap(similarity[metadata$sample, metadata$sample], annotation_row = metadata[,c("individual", "dx"), drop=F], annotation_col = metadata[,c("individual", "dx"), drop=F], cluster_cols = F, cluster_rows = F, show_rownames = F, show_colnames = F, na_col = "white", annotation_colors = list("individual" = c("X1" = "#f54b42", "X2" = "#ed9315", "X3" = "#fad220", "C1" = "#3cd6d6", "C2" = "#329fcf", "C3" = "#3c56d6")))
+dev.off()
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
