@@ -1,0 +1,172 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs3/raquelgg/xdp/"
+configfile: os.path.join(WD, "src/config_files/config.yaml")
+
+SAMPLES = config["samples"]
+geneGTF = "/projects/fs3/raquelgg/annotations/hg38/gencode/v38/gencode.v38.annotation.gtf"
+starIndex = "/projects/fs5/jakobssonlab/GRCh38.p13_gencode.v38_STAR"
+teGTF = "/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38_rmsk_TEtranscripts.gtf"
+exonGTF = "/projects/fs3/raquelgg/annotations/hg38/gencode/v38/gencode.v38.basic.annotation.gtf"
+
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs3/raquelgg/xdp/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input:
+        os.path.join(WD, "deeptools/poly_SVAs/poly_SVAs.mtx")
+
+rule matrix_SVAs:
+    input:
+        bw = expand(os.path.join(WD, "map/unique/{sample}/{sample}.bw"), sample=SAMPLES),
+        #forward = expand(os.path.join(WD, "map/unique/{sample}_Aligned.sortedByCoord.out.forward.bw"), sample=SAMPLES),
+        #reverse = expand(os.path.join(WD, "map/unique/{sample}_Aligned.sortedByCoord.out.reverse.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/CTG_JGJSeq133_140/data/hg38.fa.plus1kb.SVAs.bed"
+    output:
+        svas = os.path.join(WD, "deeptools/plus1kb_SVAs/plus1kb_SVAs_cutnrun.mtx")
+    shell:
+        """
+        grep SVA_A {input.regions}  > SVA_A.bed
+        grep SVA_B {input.regions}  > SVA_B.bed
+        grep SVA_C {input.regions}  > SVA_C.bed
+        grep SVA_D {input.regions}  > SVA_D.bed
+        grep SVA_E {input.regions}  > SVA_E.bed
+        grep SVA_F {input.regions}  > SVA_F.bed
+
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+        
+        computeMatrix scale-regions -R SVA_A.bed SVA_B.bed SVA_C.bed SVA_D.bed SVA_E.bed SVA_F.bed -S {input.bw} -b 10000 -a 10000 -o {output.svas} 
+        
+        module purge
+        """
+        # computeMatrix scale-regions -R $negative_sva_a $negative_sva_b $negative_sva_c $negative_sva_d $negative_sva_e $negative_sva_f -S {input.reverse} {input.forward} -b 1000 -a 1000 -o {output.sense_reverse}
+
+rule matrix_SVAs_groupped:
+    input:
+        bw = expand(os.path.join(WD, "map/unique/{sample}/{sample}.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/CTG_JGJSeq133_140/data/hg38.fa.plus1kb.SVAs.bed"
+    output:
+        svas = os.path.join(WD, "deeptools/plus1kb_SVAs/plus1kb_SVAs_groupped_cutnrun.mtx")
+    shell:
+        """
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+        
+        computeMatrix scale-regions -R {input.regions} -S {input.bw} -b 10000 -a 10000 -o {output.svas} 
+        
+        module purge
+        """
+
+rule matrix_SVAs_poly:
+    input:
+        bw = expand(os.path.join(WD, "map/unique/{sample}/{sample}.bw"), sample=SAMPLES),
+        regions="/projects/fs5/jakobssonlab/hg38_gencode.v38_XDP_ont_poly/polymorphic_SVA_E_F.bed"
+    output:
+        svas = os.path.join(WD, "deeptools/poly_SVAs/poly_SVAs.mtx")
+    shell:
+        """
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+        
+        computeMatrix scale-regions -R {input.regions} -S {input.bw} -b 10000 -a 10000 -o {output.svas} 
+        
+        module purge
+        """
+
+
+rule matrix_FL_L1PAs:
+    input:
+        forward_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38.fa.fulllength.L1HS_L1PA.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/FL_L1PAs/FL_L1PAs_positive_strand.mtx"),
+        reverse = os.path.join(WD, "deeptools/FL_L1PAs/FL_L1PAs_reverse_strand.mtx")
+    shell:
+        """
+        grep L1HS {input.regions}  > L1HS_FL.bed
+        grep L1PA2 {input.regions}  > L1PA2_FL.bed
+        grep L1PA3 {input.regions}  > L1PA3_FL.bed
+        grep L1PA4 {input.regions}  > L1PA4_FL.bed
+        
+        negative_l1hs=regions_negative_l1hs.bed
+        positive_l1hs=regions_positive_l1hs.bed
+
+        awk '(NR>1)' L1HS_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1hs
+        awk '(NR>1)' L1HS_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1hs
+
+        negative_l1pa2=regions_negative_l1pa2.bed
+        positive_l1pa2=regions_positive_l1pa2.bed
+
+        awk '(NR>1)' L1PA2_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa2
+        awk '(NR>1)' L1PA2_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa2
+
+        negative_l1pa3=regions_negative_l1pa3.bed
+        positive_l1pa3=regions_positive_l1pa3.bed
+
+        awk '(NR>1)' L1PA3_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa3
+        awk '(NR>1)' L1PA3_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa3
+
+        negative_l1pa4=regions_negative_l1pa4.bed
+        positive_l1pa4=regions_positive_l1pa4.bed
+
+        awk '(NR>1)' L1PA4_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa4
+        awk '(NR>1)' L1PA4_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa4
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6        
+        
+        computeMatrix scale-regions -R $positive_l1hs $positive_l1pa2 $positive_l1pa3 $positive_l1pa4 -S {input.forward_strand} {input.reverse_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative_l1hs $negative_l1pa2 $negative_l1pa3 $negative_l1pa4 -S {input.reverse_strand} {input.forward_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.reverse}
+
+        """
+
+rule matrix_FL_HERVs:
+    input:
+        forward_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38.ERVs.Info_grepv_R_concat_stranded.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/FL_HERVs/FL_HERVs_positive_strand.mtx"),
+        reverse = os.path.join(WD, "deeptools/FL_HERVs/FL_HERVs_reverse_strand.mtx")
+    shell:
+        """
+        negative=regions_negative_hervs.bed
+        positive=regions_positive_hervs.bed
+
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "-"){{print $0}}}}' > $negative
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "+"){{print $0}}}}' > $positive
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6        
+        
+        computeMatrix scale-regions -R $positive -S {input.forward_strand} {input.reverse_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative -S {input.reverse_strand} {input.forward_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.reverse}
+
+        """
+
+rule matrix_housekeeping:
+    input:
+        forward = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/rseqc/hg38.HouseKeepingGenes.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/housekeeping/housekeeping_positive_strand.mtx"),
+        reverse = os.path.join(WD, "deeptools/housekeeping/housekeeping_reverse_strand.mtx")
+    shell:
+        """
+        negative=regions_negative_housekeeping.bed
+        positive=regions_positive_housekeeping.bed
+
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "-"){{print $0}}}}' > $negative
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "+"){{print $0}}}}' > $positive
+
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+
+        computeMatrix scale-regions -R $positive -S {input.forward} {input.reverse} -b 1000 -a 1000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative -S {input.reverse} {input.forward} -b 1000 -a 1000 -o {output.reverse}
+
+        """
+
+

@@ -1,0 +1,64 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs1/jakobssonlab/xdp_wg_ont/" # Needs to be at RD if you are running the singularity...
+configfile: os.path.join(WD, "src/config_files/config_genes.json")
+
+GENES = config["regions"]
+SAMPLES = config["samples"]
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input: 
+        expand(os.path.join(WD, "2_methylation/{sample}_methylation_freq_{gene}.tsv"), sample=SAMPLES, gene=GENES)
+
+rule call_methylation:
+    input:
+        fq = lambda wildcards: f"{config['samples'][wildcards.sample][0]}/{wildcards.sample}.fastq.gz",
+        fq_index = lambda wildcards: f"{config['samples'][wildcards.sample][0]}/{wildcards.sample}.fastq.gz.index",
+        sorted_bam = os.path.join(WD, "1_mapping/{sample}.sorted.bam"),
+        indexed_bam = os.path.join(WD, "1_mapping/{sample}.sorted.bam.bai"),
+        genome_fasta = "/projects/fs3/raquelgg/annotations/hg38/GRCh38.p13/GRCh38.p13.genome.fa"
+    params:
+        coords = lambda wildcards: f"{config['regions'][wildcards.gene][0]}", # lambda wildcards: f"{config['gene'][wildcards.gene][0]}" when changing SVAs to GENES in the input rule
+    output:
+        os.path.join(WD, "2_methylation/{sample}_methylation_calls_{gene}.tsv"),
+        os.path.join(WD, "1_mapping/{gene}/{sample}_{gene}.bam"),
+        os.path.join(WD, "1_mapping/{gene}/{sample}_{gene}.bam.bai")
+    shell:
+        """
+        module purge
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools view -b {input.sorted_bam} {params.coords} > {output[1]}
+        samtools index {output[1]}
+
+        module purge
+ 
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3-threadsafe 
+
+        nanopolish call-methylation -t 1 -r {input.fq} -b {output[1]} -g {input.genome_fasta} > {output[0]} 
+
+        module purge
+        """
+
+rule methylation_freq:
+    input:
+        os.path.join(WD, "2_methylation/{sample}_methylation_calls_{gene}.tsv")
+    output:
+        os.path.join(WD, "2_methylation/{sample}_methylation_freq_{gene}.tsv")
+    shell:
+        """
+        module purge
+
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3-threadsafe
+        
+        /projects/fs3/raquelgg/cool_scripts/calculate_methylation_frequency.py {input} > {output}
+        """
+
+

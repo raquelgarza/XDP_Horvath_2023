@@ -1,0 +1,68 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs1/jakobssonlab/xdp_wg_ont/" # Needs to be at RD if you are running the singularity...
+configfile: "/projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/config.json"
+
+SAMPLES = config["samples"]
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input: 
+        expand(os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam.bai"), sample=SAMPLES) 
+
+rule map:
+    input:
+        fq = lambda wildcards: f"{config['samples'][wildcards.sample]}/{wildcards.sample}.fastq.gz",
+        fq_index = lambda wildcards: f"{config['samples'][wildcards.sample]}/{wildcards.sample}.fastq.gz.index",
+        index = "/projects/fs5/jakobssonlab/hg38_gencode.v38_XDP_ont_poly/polymorphic_hg38.mmi"
+    output:
+        os.path.join(WD, "1_mapping/{sample}_poly.bam")
+    shell:
+        """
+        ml GCCcore/11.2.0 minimap2/2.24
+
+        date
+
+        echo "Start 1_mapping!"
+
+        minimap2 -t 20 -a -x map-ont {input.index} {input.fq} > {output}
+
+        date
+
+        module purge
+        """
+
+rule sort:
+    input:
+        os.path.join(WD, "1_mapping/{sample}_poly.bam")
+    output:
+        os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools sort -o {output} {input}
+
+        module purge
+        """
+
+rule index:
+    input:
+        os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam"),
+    output:
+        os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam.bai")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools index {input}
+
+        module purge
+        """
+

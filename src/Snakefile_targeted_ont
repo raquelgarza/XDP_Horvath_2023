@@ -1,0 +1,122 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs1/jakobssonlab/xdp_targeted_ont/"
+configfile: "/projects/fs1/jakobssonlab/xdp_targeted_ont/src/config_files/config.json"
+
+SAMPLES = config["samples"]
+
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs1/jakobssonlab/xdp_targeted_ont/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input: 
+        expand(os.path.join(WD, "methylation/{sample}_methylation_calls.db"), sample=SAMPLES),
+        expand(os.path.join(WD, "methylation/{sample}_methylation_calls.tsv.gz"), sample=SAMPLES)
+
+rule nanopolish_index:
+    input:
+        lambda wildcards: f"{config['samples'][wildcards.sample]}"
+    output:
+        "{sample}.indexed.txt"
+    shell:
+        """
+        fast5=$(echo {input} | awk -F"/" '{{$NF=""; print}}' OFS="/")
+
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3
+
+        nanopolish index -d $fast5 {input} || exit 2;
+
+        if [$? -eq 0] then
+            echo "Files indexed correctly" > {output}
+        else
+            echo "Indexing went wrong"
+        fi
+
+        module purge
+        """
+
+rule map:
+    input:
+        fq = lambda wildcards: f"{config['samples'][wildcards.sample]}",
+        fq_index = lambda wildcards: f"{config['samples'][wildcards.sample]}.index",       
+        index = "/projects/fs5/jakobssonlab/hg38_minimap2_index_XDP_ont/xdp_hg38.mmi"
+    output:
+        os.path.join(WD, "mapping/{sample}.bam")
+    shell:
+        """
+        ml GCCcore/11.2.0 minimap2/2.24
+
+        minimap2 -a -x map-ont {input.index} {input.fq} > {output}
+ 
+        module purge
+        """
+
+rule sort:
+    input:
+        os.path.join(WD, "mapping/{sample}.bam")
+    output:
+        os.path.join(WD, "mapping/{sample}.sorted.bam")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools sort -o {output} {input}
+
+        module purge
+        """
+
+rule index:
+    input:
+        os.path.join(WD, "mapping/{sample}.sorted.bam")
+    output:
+        os.path.join(WD, "mapping/{sample}.sorted.bam.bai")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1 
+
+        samtools index {input}
+
+        module purge
+        """
+
+rule call_methylation:
+    input:
+        fq = lambda wildcards: f"{config['samples'][wildcards.sample]}",
+        fq_index = lambda wildcards: f"{config['samples'][wildcards.sample]}.index",
+        sorted_bam = os.path.join(WD, "mapping/{sample}.sorted.bam"),
+        indexed_bam = os.path.join(WD, "mapping/{sample}.sorted.bam.bai"),
+        genome_fasta = "/projects/fs5/jakobssonlab/hg38_minimap2_index_XDP_ont/xdp_hg38.fa"
+    output:
+        os.path.join(WD, "methylation/{sample}_methylation_calls.tsv"),
+        os.path.join(WD, "methylation/{sample}_methylation_calls.tsv.gz")
+    shell:
+        """
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3
+
+        nanopolish call-methylation -t 1 -r {input.fq} -b {input.sorted_bam} -g  {input.genome_fasta} > {output[0]} 
+        gzip -c {output[0]} > {output[1]}
+
+        module purge
+        """
+
+rule methylation_db:
+    input:
+        os.path.join(WD, "methylation/{sample}_methylation_calls.tsv.gz")
+    output:
+        os.path.join(WD, "methylation/{sample}_methylation_calls.db")
+    shell:
+        """
+        module purge
+        ml GCC/10.3.0  OpenMPI/4.1.1  methylartist/1.2.2
+
+        methylartist db-nanopolish -m {input} -d {output}
+
+        module purge 
+        """
+
+

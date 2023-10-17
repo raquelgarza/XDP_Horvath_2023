@@ -1,0 +1,90 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs1/jakobssonlab/xdp_wg_ont/" # Needs to be at RD if you are running the singularity...
+RD = "/projects/fs1/jakobssonlab/op_069/"
+configfile: "/projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/config_op_069.json"
+
+SAMPLES = config["samples"]
+#TES = config["TEs"]
+geneGTF = "/projects/fs3/raquelgg/annotations/hg38/gencode/v38/gencode.v38.annotation.gtf"
+teGTF = "/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38_rmsk_TEtranscripts.gtf"
+teBED = "/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38_rmsk_TEtranscripts.bed"
+
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input: 
+        expand(os.path.join(WD, "1_mapping/{sample}.sorted.bam.bai"), sample = SAMPLES) 
+
+rule nanopolish_index:
+    input:
+        fq = os.path.join(RD, "data/{sample}/{sample}.fastq.gz")
+    params:
+        fast5 = os.path.join(RD, "rawdata/{sample}/fast5_pass")
+    output:
+        fq_index = os.path.join(RD, "data/{sample}/{sample}.fastq.gz.index") 
+    shell:
+        """
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3
+
+        nanopolish index -d {params.fast5} {input}
+
+        module purge
+        """
+
+rule map:
+    input:
+        fq = os.path.join(RD, "data/{sample}/{sample}.fastq.gz"), 
+        fq_index = os.path.join(RD, "data/{sample}/{sample}.fastq.gz.index"),
+        index = "/projects/fs5/jakobssonlab/hg38_minimap2_index_XDP_ont/xdp_hg38.mmi"
+    output:
+        os.path.join(WD, "1_mapping/{sample}.bam")
+    shell:
+        """
+        ml GCCcore/11.2.0 minimap2/2.24
+
+        date
+
+        echo "Start 1_mapping!"
+
+        minimap2 -t 20 -a -x map-ont {input.index} {input.fq} > {output}
+
+        date
+
+        module purge
+        """
+
+rule sort:
+    input:
+        os.path.join(WD, "1_mapping/{sample}.bam")
+    output:
+        os.path.join(WD, "1_mapping/{sample}.sorted.bam")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools sort -o {output} {input}
+
+        module purge
+        """
+
+rule index:
+    input:
+        os.path.join(WD, "1_mapping/{sample}.sorted.bam")
+    output:
+        os.path.join(WD, "1_mapping/{sample}.sorted.bam.bai")
+    shell:
+        """
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools index {input}
+
+        module purge
+        """
+

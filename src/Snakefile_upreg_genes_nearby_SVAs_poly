@@ -1,0 +1,161 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs1/jakobssonlab/xdp_wg_ont/" # Needs to be at RD if you are running the singularity...
+configfile: os.path.join(WD, "src/config_files/config_genes_poly_NES.json")
+
+GENES = config["regions"]
+SAMPLES = config["samples"]
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs1/jakobssonlab/xdp_wg_ont/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+rule all:
+    input: 
+        #expand(os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}_done.txt"), sample=SAMPLES, gene=GENES),
+        expand(os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}_done.txt"), gene=GENES)
+         
+
+rule sort_gtf:
+    input:
+       "/projects/fs5/jakobssonlab/hg38_gencode.v38_XDP_ont_poly/gencode.v38.annotation_poly.gtf" 
+    params:
+       chr = lambda wildcards: f"{config['regions'][wildcards.gene][1]}",
+       start = lambda wildcards: f"{config['regions'][wildcards.gene][2]}",
+       end = lambda wildcards: f"{config['regions'][wildcards.gene][3]}"
+    output:
+        os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}.gtf"),
+        os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}.sorted.gtf"),
+        os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/genes_region_{gene}.txt")
+    shell:
+        """
+        ml GCCcore/11.2.0 Perl/5.34.0
+
+        awk '{{if($1 == "{params.chr}" && $4 >= {params.start} && $5 <= {params.end}){{print $0}}}}' {input} > {output[0]}
+
+        if [ -s {output[0]} ]; then
+            grep -w exon {output[0]} | awk '{{print $16}}' | tr -d '"\|;' | sort | uniq > {output[2]} 
+            grep -wf {output[2]} {input} > {output[0]}
+            /projects/fs3/raquelgg/cool_scripts/gff3sort/gff3sort.pl {output[0]} > {output[1]}
+        else
+            echo "The file is empty".
+            touch {output[2]} 
+            touch {output[1]} 
+        fi
+       """
+
+rule bgzip:
+    input:
+        os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}.sorted.gtf")
+    output:
+        os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}.sorted.gtf.gz")
+    shell:
+        """
+        module purge
+        ml GCC/4.9.3-2.25  OpenMPI/1.10.2 SAMtools/1.3.1-HTSlib-1.3.1        
+
+        if [ -s {input} ]; then
+            bgzip {input}
+            tabix -p gff {output}
+        else
+            touch {output}
+        fi
+
+        module purge 
+        """
+
+rule call_methylation:
+    input:
+        fq = lambda wildcards: f"{config['samples'][wildcards.sample][0]}/{wildcards.sample}.fastq.gz",
+        fq_index = lambda wildcards: f"{config['samples'][wildcards.sample][0]}/{wildcards.sample}.fastq.gz.index",
+        sorted_bam = os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam"),
+        indexed_bam = os.path.join(WD, "1_mapping/{sample}_poly.sorted.bam.bai"),
+        genome_fasta = "/projects/fs5/jakobssonlab/hg38_gencode.v38_XDP_ont_poly/polymorphic_hg38.fa"
+    params:
+        coords = lambda wildcards: f"{config['regions'][wildcards.gene][0]}", # lambda wildcards: f"{config['gene'][wildcards.gene][0]}" when changing SVAs to GENES in the input rule
+    output:
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.tsv"),
+        os.path.join(WD, "1_mapping/{gene}/{sample}_{gene}_poly.bam"),
+        os.path.join(WD, "1_mapping/{gene}/{sample}_{gene}_poly.bam.bai")
+    shell:
+        """
+        module purge
+        ml GCC/11.3.0 SAMtools/1.16.1
+
+        samtools view -b {input.sorted_bam} {params.coords} > {output[1]}
+        samtools index {output[1]}
+
+        module purge
+ 
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3-threadsafe 
+
+        nanopolish call-methylation -t 1 -r {input.fq} -b {output[1]} -g {input.genome_fasta} > {output[0]} 
+
+        module purge
+        """
+
+rule methylation_freq:
+    input:
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.tsv")
+    output:
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_freq_{gene}.tsv")
+    shell:
+        """
+        module purge
+
+        ml GCC/10.2.0  OpenMPI/4.0.5 nanopolish/0.13.3-threadsafe
+        
+        /projects/fs3/raquelgg/cool_scripts/calculate_methylation_frequency.py {input} > {output}
+        """
+
+rule methylation_db:
+    input:
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.tsv")
+    output:
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.db"),
+        os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.tsv.gz")
+    shell:
+        """
+        module purge
+        ml GCC/10.3.0  OpenMPI/4.1.1 methylartist/1.2.2
+
+        gzip {input}
+        methylartist db-nanopolish -m {output[1]} -d {output[0]}
+
+        module purge 
+        """
+
+rule methylartist_region:
+    input:
+        gene_gz = os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}.sorted.gtf.gz"),
+        db = expand(os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.db"), sample=SAMPLES, gene=GENES),
+        tsv = expand(os.path.join(WD, "2_methylation_poly/{sample}_methylation_calls_{gene}.tsv.gz"), sample=SAMPLES, gene=GENES),
+        bai = expand(os.path.join(WD, "1_mapping/{gene}/{sample}_{gene}_poly.bam.bai"), sample=SAMPLES, gene=GENES)
+    params:
+        coords = lambda wildcards: f"{config['regions'][wildcards.gene][0]}",
+        highlight = lambda wildcards: f"{config['regions'][wildcards.gene][4]}",
+        outdir = os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/"),
+        methylation_calls = os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/methylation_calls_files_{gene}.txt")
+    output:
+        done = os.path.join(WD, "4_upreg_genes_nearby_SVAs_poly/{gene}/{gene}_done.txt")
+    run:
+        with open(params.methylation_calls, "a") as out:
+            for sample in SAMPLES:
+                out.write(os.path.join(WD, "1_mapping", wildcards.gene, (sample + "_" + wildcards.gene + "_poly.bam")) + " " + os.path.join(WD, "2_methylation_poly", (sample + "_methylation_calls_" + wildcards.gene + ".db " + f"{config['samples'][sample][1]}\n")))
+        shell("""
+        module purge
+        ml GCC/11.2.0  OpenMPI/4.1.1 methylartist/1.2.4
+
+        if [ -s {input.gene_gz} ]; then
+            methylartist locus --svg --labelgenes -d {params.methylation_calls} -i {params.coords} -g {input.gene_gz} -l {params.highlight} --highlightpalette "YlOrBr" 
+        else
+            methylartist locus --svg --labelgenes -d {params.methylation_calls} -i {params.coords} -l {params.highlight} --highlightpalette "YlOrBr"
+        fi
+
+        echo done! > {output.done}
+        coords=$(echo {params.coords} | sed 's/:/_/g' | sed 's/-/_/g')
+        mv methylation_calls_files_{wildcards.gene}.$coords.CpG.*.locus.meth.svg {params.outdir}
+        """)

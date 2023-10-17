@@ -1,0 +1,398 @@
+# -*- coding: utf-8 -*-
+
+# lunarc configuration file
+# configuration file with sample list (yaml list)
+
+import os
+
+WD = "/projects/fs3/raquelgg/xdp/"
+configfile: os.path.join(WD, "src/config_files/config.json")
+
+SAMPLES = config["samples"]
+geneGTF = "/projects/fs3/raquelgg/annotations/hg38/gencode/v38/gencode.v38.annotation.gtf"
+exonGTF = "/projects/fs3/raquelgg/annotations/hg38/gencode/v38/gencode.v38.basic.annotation.gtf"
+starIndex = "/projects/fs5/jakobssonlab/GRCh38.p13_gencode.v38_STAR"
+teGTF = "/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38_rmsk_TEtranscripts.gtf"
+
+xdpIndex = "/projects/fs5/jakobssonlab/hg38_gencode.v38_STAR_XDP/"
+xdpGene = "/projects/fs5/jakobssonlab/hg38_gencode.v38_STAR_XDP/gencode.v38.annotation.XDP.gtf"
+
+# Run as:
+# snakemake -j 5 --cluster-config /projects/fs3/raquelgg/xdp/src/config_files/lunarc_config.json --cluster "sbatch -A {cluster.account} -p {cluster.partition} --tasks-per-node {cluster.tasks-per-node}  -t {cluster.time} -o {cluster.output} -e {cluster.error} -J {cluster.job-name} -N {cluster.nodes}" --latency-wait 60
+
+# Removed from TEcounts
+# "XNES1_DNMT1_LZ__A_S23" : "/projects/fs5/jakobssonlab/CTG_JGJSeq168/fastq_files/XNES1_DNMT1_LZ__A_S23",
+# "JOA4_ZF91lacZA_S20" : "/projects/fs5/jakobssonlab/CTG_JGJSeq133_140/fastq_files/JOA4_ZF91lacZA_S20/JOA4_ZF91lacZA_S20",
+rule all:
+    input:
+        os.path.join(WD, "gene_counts/unique/intron32_count_matrix_2.csv"),
+        expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bw"), sample=SAMPLES),
+        os.path.join(WD, "gene_counts/default/gene_count_matrix_2.csv"),
+        os.path.join(WD, "gene_counts/default/exon_count_matrix_2.csv"),
+        os.path.join(WD, "TEcounts/unique/TE_count_matrix_2.csv"),
+        expand(os.path.join(WD, "TEcounts/multiple/{sample}.cntTable"), sample=SAMPLES),
+	expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES)
+	#os.path.join(WD, "deeptools/plus1kb_SVAs/plus1kb_SVAs_negative.mtx"),
+	#os.path.join(WD, "deeptools/housekeeping/housekeeping_negative.mtx"),
+	#os.path.join(WD, "deeptools/FL_L1PAs/FL_L1PAs_crispri_reverse_strand.mtx")
+
+
+rule uniquemapping:
+    input:
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R1_001.fastq.gz",
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R2_001.fastq.gz",
+        starIndex,
+        geneGTF
+    params:
+        prefix = os.path.join(WD, "map/unique/{sample}/{sample}_")
+    output:
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam")
+    shell:
+        """
+        ml GCC/10.2.0 STAR/2.7.8a
+
+        STAR --runThreadN 10 \
+        --readFilesCommand gunzip -c \
+        --outSAMattributes All \
+        --outSAMtype BAM SortedByCoordinate \
+        --genomeDir {input[2]} \
+        --sjdbGTFfile {input[3]} \
+        --outFileNamePrefix {params.prefix} \
+        --outFilterMultimapNmax 1 \
+        --outFilterMismatchNoverLmax 0.03  \
+        --readFilesIn  {input[0]} {input[1]}
+        module purge
+        """
+
+rule uniquemapping_XDP:
+    input:
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R1_001.fastq.gz",
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R2_001.fastq.gz",
+        xdpIndex,
+        xdpGene
+    params:
+        prefix = os.path.join(WD, "map_xdp/unique/{sample}/{sample}_")
+    output:
+        os.path.join(WD, "map_xdp/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam")
+    shell:
+        """
+        ml GCC/10.2.0 STAR/2.7.8a
+
+        STAR --runThreadN 10 \
+        --readFilesCommand gunzip -c \
+        --outSAMattributes All \
+        --outSAMtype BAM SortedByCoordinate \
+        --genomeDir {input[2]} \
+        --sjdbGTFfile {input[3]} \
+        --outFileNamePrefix {params.prefix} \
+        --outFilterMultimapNmax 1 \
+        --outFilterMismatchNoverLmax 0.03  \
+        --readFilesIn  {input[0]} {input[1]}
+        module purge
+        """
+
+rule mapping:
+    input:
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R1_001.fastq.gz",
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R2_001.fastq.gz",
+        starIndex,
+        geneGTF
+    params:
+        prefix = os.path.join(WD, "map/default/{sample}/{sample}_")
+    output:
+        os.path.join(WD, "map/default/{sample}/{sample}_Aligned.sortedByCoord.out.bam")
+    shell:
+        """
+        #echo Mapping reads from {wildcards.sample} to hg38!
+        ml GCC/10.2.0 STAR/2.7.8a
+
+        STAR --runThreadN 10 \
+        --readFilesCommand gunzip -c \
+        --outSAMattributes All \
+        --outSAMtype BAM SortedByCoordinate \
+        --genomeDir {input[2]} \
+        --sjdbGTFfile {input[3]} \
+        --outFileNamePrefix {params.prefix} \
+        --readFilesIn  {input[0]} {input[1]}
+
+        module purge
+        """
+
+rule multimapping:
+    input:
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R1_001.fastq.gz",
+        lambda wildcards: f"{config['samples'][wildcards.sample]}_R2_001.fastq.gz",
+        starIndex,
+        geneGTF
+    params:
+        prefix = os.path.join(WD, "map/multiple/{sample}/{sample}_")
+    output:
+        os.path.join(WD, "map/multiple/{sample}/{sample}_Aligned.sortedByCoord.out.bam")
+    shell:
+        """
+        ml GCC/10.2.0 STAR/2.7.8a
+
+        STAR --runThreadN 10 \
+        --readFilesCommand gunzip -c \
+        --outSAMattributes All \
+        --outSAMtype BAM SortedByCoordinate \
+        --sjdbGTFfile {input[3]} \
+        --genomeDir {input[2]} \
+        --outFileNamePrefix {params.prefix} \
+        --outFilterMultimapNmax 100 \
+        --winAnchorMultimapNmax 200  \
+        --readFilesIn  {input[0]} {input[1]}
+        module purge
+        """
+
+rule indexing:
+    input:
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam")
+    output:
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam.bai")
+    shell:
+        """
+        ml GCC/10.2.0 SAMtools/1.12
+        samtools index -b {input}
+
+        module purge
+        """
+
+rule bigwig:
+    input:
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam"),
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam.bai")
+    output:
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bw"),
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"),
+        os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw")
+    shell:
+        """
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6
+        bamCoverage --normalizeUsingRPKM -b {input[0]} -o {output[0]}
+
+        bamCoverage --normalizeUsingRPKM --filterRNAstrand forward -b {input[0]} -o {output[1]}
+        bamCoverage --normalizeUsingRPKM --filterRNAstrand reverse -b {input[0]} -o {output[2]}
+
+        module purge
+        """
+
+rule intron32_quantification:
+    input:
+        samples=expand(os.path.join(WD, "map/default/{sample}/{sample}_Aligned.sortedByCoord.out.bam"), sample=SAMPLES),
+        intronGTF = "/projects/fs3/raquelgg/CTG_JGJSeq125_129/data/intron32.gtf"
+    output: 
+        os.path.join(WD, "gene_counts/unique/intron32_count_matrix_2.csv"),
+        os.path.join(WD, "gene_counts/unique/intron32_count_matrix_1.csv")
+    shell:
+        """
+        module purge
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1
+        ml Subread/1.6.3
+
+        featureCounts -p -F GTF -t gene -g gene_id -s 2 -a {input.intronGTF} -o {output[0]} {input.samples}
+        featureCounts -p -F GTF -t gene -g gene_id -s 1 -a {input.intronGTF} -o {output[1]} {input.samples}
+
+        module purge
+        """
+
+rule gene_quantification:
+    input:
+        annotation = geneGTF,
+        samples=expand(os.path.join(WD, "map/default/{sample}/{sample}_Aligned.sortedByCoord.out.bam"), sample=SAMPLES)
+    output:
+        os.path.join(WD, "gene_counts/default/gene_count_matrix_2.csv")
+    shell:
+        """
+        module purge
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1
+        ml Subread/1.6.3
+
+        featureCounts -p -F GTF -s 2 -a {input.annotation} -o {output} {input.samples}
+
+        module purge
+        """
+
+rule exon_quantification:
+    input:
+        annotation=exonGTF,
+        samples=expand(os.path.join(WD, "map/default/{sample}/{sample}_Aligned.sortedByCoord.out.bam"), sample=SAMPLES)
+    output: 
+        os.path.join(WD, "gene_counts/default/exon_count_matrix_2.csv")
+    shell:
+        """
+        module purge
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1
+        ml Subread/1.6.3
+        featureCounts -p -F GTF -t exon -g exon_id -f -O -s 2 -T 20 -a {input.annotation} -o {output} {input.samples}
+
+        module purge
+        """
+
+rule TE_quantification:
+    input:
+        TEgtf = teGTF,
+        samples=expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.out.bam"), sample=SAMPLES)
+    output:
+        os.path.join(WD, "TEcounts/unique/TE_count_matrix_2.csv")
+    shell:
+        """
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1
+        ml Subread/1.6.3
+
+        featureCounts -p -s 2 -F GTF -g transcript_id -a {input.TEgtf} -o {output} {input.samples}
+
+        module purge
+        """
+
+rule TEcounts:
+    input:
+        bam = os.path.join(WD, "map/multiple/{sample}/{sample}_Aligned.sortedByCoord.out.bam"),
+        gtf = geneGTF,
+        TEgtf = teGTF
+    params:
+        prefix = os.path.join(WD, "TEcounts/multiple/{sample}")
+    output:
+        table = os.path.join(WD, "TEcounts/multiple/{sample}.cntTable")
+    shell:
+        """
+        ml icc/2018.1.163-GCC-6.4.0-2.28  OpenMPI/2.1.2 TEToolkit/2.0.3-Python-2.7.14        
+        
+        TEcount -b {input.bam} --GTF {input.gtf} --TE {input.TEgtf} --stranded reverse --mode multi --project {params.prefix} --format BAM --sortByPos
+
+        module purge
+        """
+
+rule matrix_SVAs:
+    input:
+        forward_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38.fa.plus1kb.SVAs.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/plus1kb_SVAs/plus1kb_SVAs_positive.mtx"),
+        negative = os.path.join(WD, "deeptools/plus1kb_SVAs/plus1kb_SVAs_negative.mtx")
+    shell:
+        """
+        grep SVA_A {input.regions}  > SVA_A.bed
+        grep SVA_B {input.regions}  > SVA_B.bed
+        grep SVA_C {input.regions}  > SVA_C.bed
+        grep SVA_D {input.regions}  > SVA_D.bed
+        grep SVA_E {input.regions}  > SVA_E.bed
+        grep SVA_F {input.regions}  > SVA_F.bed
+
+        negative_sva_a=regions_negative_SVA_A.bed
+        positive_sva_a=regions_positive_SVA_A.bed
+
+        awk '(NR>1)' SVA_A.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_a
+        awk '(NR>1)' SVA_A.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_a
+
+        negative_sva_b=regions_negative_SVA_B.bed
+        positive_sva_b=regions_positive_SVA_B.bed
+
+        awk '(NR>1)' SVA_B.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_b
+        awk '(NR>1)' SVA_B.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_b
+
+        negative_sva_c=regions_negative_SVA_C.bed
+        positive_sva_c=regions_positive_SVA_C.bed
+
+        awk '(NR>1)' SVA_C.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_c
+        awk '(NR>1)' SVA_C.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_c
+
+        negative_sva_d=regions_negative_SVA_D.bed
+        positive_sva_d=regions_positive_SVA_D.bed
+
+        awk '(NR>1)' SVA_D.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_d
+        awk '(NR>1)' SVA_D.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_d
+
+        negative_sva_e=regions_negative_SVA_E.bed
+        positive_sva_e=regions_positive_SVA_E.bed
+
+        awk '(NR>1)' SVA_E.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_e
+        awk '(NR>1)' SVA_E.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_e
+
+        negative_sva_f=regions_negative_SVA_F.bed
+        positive_sva_f=regions_positive_SVA_F.bed
+
+        awk '(NR>1)' SVA_F.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_sva_f
+        awk '(NR>1)' SVA_F.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_sva_f
+
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+        computeMatrix scale-regions -R $positive_sva_a $positive_sva_b $positive_sva_c $positive_sva_d $positive_sva_e $positive_sva_f -S {input.forward_strand} {input.reverse_strand}  -b 10000 -a 10000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative_sva_a $negative_sva_b $negative_sva_c $negative_sva_d $negative_sva_e $negative_sva_f -S {input.reverse_strand} {input.forward_strand}  -b 10000 -a 10000 -o {output.negative}
+        
+        module purge
+        """
+
+
+rule matrix_FL_L1PAs:
+    input:
+        forward_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/repeatmasker/hg38.fa.fulllength.L1HS_L1PA.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/FL_L1PAs/FL_L1PAs_crispri_positive_strand.mtx"),
+        reverse = os.path.join(WD, "deeptools/FL_L1PAs/FL_L1PAs_crispri_reverse_strand.mtx")
+    shell:
+        """
+        grep L1HS {input.regions}  > L1HS_FL.bed
+        grep L1PA2 {input.regions}  > L1PA2_FL.bed
+        grep L1PA3 {input.regions}  > L1PA3_FL.bed
+        grep L1PA4 {input.regions}  > L1PA4_FL.bed
+        
+        negative_l1hs=regions_negative_l1hs.bed
+        positive_l1hs=regions_positive_l1hs.bed
+
+        awk '(NR>1)' L1HS_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1hs
+        awk '(NR>1)' L1HS_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1hs
+
+        negative_l1pa2=regions_negative_l1pa2.bed
+        positive_l1pa2=regions_positive_l1pa2.bed
+
+        awk '(NR>1)' L1PA2_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa2
+        awk '(NR>1)' L1PA2_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa2
+
+        negative_l1pa3=regions_negative_l1pa3.bed
+        positive_l1pa3=regions_positive_l1pa3.bed
+
+        awk '(NR>1)' L1PA3_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa3
+        awk '(NR>1)' L1PA3_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa3
+
+        negative_l1pa4=regions_negative_l1pa4.bed
+        positive_l1pa4=regions_positive_l1pa4.bed
+
+        awk '(NR>1)' L1PA4_FL.bed | awk '{{if($6 == "-"){{print $0}}}}' > $negative_l1pa4
+        awk '(NR>1)' L1PA4_FL.bed | awk '{{if($6 == "+"){{print $0}}}}' > $positive_l1pa4
+
+        ml GCC/7.3.0-2.30  OpenMPI/3.1.1 deepTools/2.5.4-Python-3.6.6        
+        
+        computeMatrix scale-regions -R $positive_l1hs $positive_l1pa2 $positive_l1pa3 $positive_l1pa4 -S {input.forward_strand} {input.reverse_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative_l1hs $negative_l1pa2 $negative_l1pa3 $negative_l1pa4 -S {input.reverse_strand} {input.forward_strand} --regionBodyLength 6000 -b 6000 -a 6000 -o {output.reverse}
+
+        """
+
+rule matrix_housekeeping:
+    input:
+        forward_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.forward.out.bw"), sample=SAMPLES),
+        reverse_strand = expand(os.path.join(WD, "map/unique/{sample}/{sample}_Aligned.sortedByCoord.reverse.out.bw"), sample=SAMPLES),
+        regions="/projects/fs3/raquelgg/annotations/hg38/rseqc/hg38.HouseKeepingGenes.bed"
+    output:
+        positive = os.path.join(WD, "deeptools/housekeeping/housekeeping_positive.mtx"),
+        negative= os.path.join(WD, "deeptools/housekeeping/housekeeping_negative.mtx")
+    shell:
+        """
+        negative=regions_negative_housekeeping.bed
+        positive=regions_positive_housekeeping.bed
+
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "-"){{print $0}}}}' > $negative
+        awk '(NR>1)' {input.regions} | awk '{{if($6 == "+"){{print $0}}}}' > $positive
+
+        ml GCC/5.4.0-2.26  OpenMPI/1.10.3 Python/3.5.2
+        computeMatrix scale-regions -R $positive -S {input.forward_strand} {input.reverse_strand}  -b 1000 -a 1000 -o {output.positive} 
+        computeMatrix scale-regions -R $negative -S {input.reverse_strand} {input.forward_strand}  -b 1000 -a 1000 -o {output.negative}
+
+        module purge
+        """
