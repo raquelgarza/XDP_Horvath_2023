@@ -1,6 +1,7 @@
 # The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease
 author: Raquel Garza
-date: "2023-10-11"
+
+date: 2023-10-11
 
 This repository presents analyses for the manuscript
 [The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease]().
