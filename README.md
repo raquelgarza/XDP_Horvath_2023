@@ -4,7 +4,7 @@ author: Raquel Garza
 date: 2023-10-11
 
 This repository presents analyses for the manuscript
-[The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease]().
+[Mini-heterochromatin domains constrain the cis-regulatory impact of SVA transposons in human brain development and disease]().
 
 ## File tree
 - `src` - Directory containing all pipelines and scripts.
@@ -29,7 +29,6 @@ This repository presents analyses for the manuscript
 ## Statistical and visualization scripts
 - `src/r_scripts` - Directory containing R markdowns for downstream analyses and visualization for the figures.
 	+ [**SNP_analysis.Rmd**](./src/r_scripts/SNP_analysis.Rmd) - R markdown for the visualization of the SNP analysis.
-	+ [**all_experiments_pcas_kds_taf1_clean.Rmd**](./src/r_scripts/all_experiments_pcas_kds_taf1_clean.Rmd) - Gene DEA.
-	+ [**TE_DEA_all_experiments.Rmd**](./src/r_scripts/TE_DEA_all_experiments.Rmd) - TE DEA.
-	+ [**common_SVAs_iPSC_iPSCNES.Rmd**](./src/r_scripts/common_SVAs_iPSC_iPSCNES.Rmd) - Upregulated SVAs common between ipsc and ipsc --> nes. 
+	+ [**gene_DEA_experiments.Rmd**](./src/r_scripts/gene_DEA_experiments.Rmd) - Gene DEA.
+	+ [**TE_DEA_experiments.Rmd**](./src/r_scripts/TE_DEA_experiments.Rmd) - TE DEA.
 
