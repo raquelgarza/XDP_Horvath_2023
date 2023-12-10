@@ -1,10 +1,10 @@
-# The KRAB zinc finger protein ZNF91 protects the human genome from the regulatory impact of SVA transposons in human brain development and disease
+# Mini-heterochromatin domains constrain the cis-regulatory impact of SVA transposons in human brain development and disease
 author: Raquel Garza
 
-date: 2023-10-11
+date: 2023-12-10
 
 This repository presents analyses for the manuscript
-[Mini-heterochromatin domains constrain the cis-regulatory impact of SVA transposons in human brain development and disease]().
+[Mini-heterochromatin domains constrain the cis-regulatory impact of SVA transposons in human brain development and disease](https://www.biorxiv.org/content/10.1101/2023.10.20.563233v1).
 
 ## File tree
 - `src` - Directory containing all pipelines and scripts.
