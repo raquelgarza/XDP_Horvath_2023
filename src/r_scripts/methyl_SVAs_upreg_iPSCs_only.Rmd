@@ -1,0 +1,96 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(data.table)
+library(ggplot2)
+library(stringr)
+
+path <- "/Volumes/MyPassport/op_043/04.08.23/2_methylation/"
+files <- list.files(path)
+df <- data.frame()
+for(i in files){
+  tmp <- fread(paste(path, i, sep=""), fill = T)
+  df <- rbind(df, tmp)
+}
+methyl <- data.frame()
+ips_nes_svas <- rownames(plus1kb_SVAs_experiment_res$ZNF91_iPSC_NES[which(plus1kb_SVAs_experiment_res$ZNF91_iPSC_NES$log2FoldChange > 1 & plus1kb_SVAs_experiment_res$ZNF91_iPSC_NES$padj < 0.05),])
+
+for(file in files){
+  df <- fread(paste(path, file, sep=""), data.table = F)
+  df$sample <- sapply(str_split(file, "_methylation_freq_"), `[[`, 1)
+  sva <- str_remove(sapply(str_split(file, "_methylation_freq_"), `[[`, 2), ".tsv")
+  df$sva <- sva 
+  df$ipsc_nes_only <- ifelse(sva %in% ips_nes_svas, "iPSC --> NES", "other?")
+  methyl <- rbind(methyl, df)
+}
+
+tegtf <- fread("/Volumes/MyPassport/annotations/human/hg38_gencode.v38_XDP_ont_poly/upreg_SVAs_ZNF91_iPSC_NES.gtf", data.table = F)
+tegtf$V9 <- gsub(';|"', "", sapply(str_split(tegtf$V9, " gene_name "), `[[`, 2))
+colnames(tegtf) <- c("te_chr","name1", "name2", "te_start", "te_end", "dot", "te_strand", "dot2", "te_id")
+sva_ips_nes_bed <- tegtf[which(tegtf$te_id %in% ips_nes_svas),]
+
+methyl <- merge(methyl, tegtf[,c("te_id", "te_chr", "te_start", "te_end", "te_strand")], by.x="sva", by.y="te_id")
+methyl$te_length <- methyl$te_end - methyl$te_start
+methyl$te_promoter_start <- ifelse(methyl$te_strand == "-", methyl$te_end, methyl$te_start)
+methyl$te_middle <- (methyl$te_start + ((methyl$te_length) / 2))
+methyl$te_quarter <- (methyl$te_start + ((methyl$te_length) / 4))
+
+methyl$promoter_region <- ifelse(methyl$te_strand == "-",
+                              methyl$start < methyl$te_promoter_start & methyl$start > methyl$te_quarter,
+                              methyl$start > methyl$te_promoter_start & methyl$start < methyl$te_quarter)
+
+methyl <- methyl[which(methyl$promoter_region),]
+```
+
+```{r}
+methyl_avg <- aggregate(methyl$methylated_frequency, by=list(methyl$sample, methyl$sva, methyl$ipsc_nes_only), FUN=mean)
+colnames(methyl_avg) <- c("sample", "SVA", "Upregulation", "Methylated frequency")
+methyl_avg$sample %in% c("op_043_001",
+                         "op_043_002",
+                         "op_069_001",
+                         "op_069_002",
+                         "op_069_002B",
+                         "op_069_003",
+                         "op_069_003B")
+
+methyl_avg$type <- ifelse(methyl_avg$sample == "op_069_001", "iPSC WT",
+                           ifelse(methyl_avg$sample %in% c("op_043_001", "op_043_002"), "NES WT",
+                                  ifelse(methyl_avg$sample %in% c("op_069_002", "op_069_002B"), "iPS ZNF91KD", 
+                                         ifelse(methyl_avg$sample %in% c("op_069_003", "op_069_003B"), "ZNF91KD iPS to NES", "?"))))
+methyl$type <- ifelse(methyl$sample == "op_069_001", "iPSC WT",
+                           ifelse(methyl$sample %in% c("op_043_001", "op_043_002"), "NES WT",
+                                  ifelse(methyl$sample %in% c("op_069_002", "op_069_002B"), "iPS ZNF91KD", 
+                                         ifelse(methyl$sample %in% c("op_069_003", "op_069_003B"), "ZNF91KD iPS to NES", "?"))))
+methyl_avg$type <- factor(methyl_avg$type, levels = c("iPSC WT", "NES WT", "iPS ZNF91KD", "ZNF91KD iPS to NES"))
+methyl$type <- factor(methyl$type, levels = c("iPSC WT", "NES WT", "iPS ZNF91KD", "ZNF91KD iPS to NES"))
+methyl_avg$group <- ifelse(methyl_avg$type %in% c("iPSC WT", "NES WT"), "methylated", "unmethylated")
+methyl$group <- ifelse(methyl$type %in% c("iPSC WT", "NES WT"), "methylated", "unmethylated")
+
+library(ggpubr)
+dodge <- position_dodge(width = 0.9)
+ggplot(subset(methyl_avg, methyl_avg$Upregulation != "polymorphic"), aes(x=group, y=`Methylated frequency`, fill=type))+ 
+  geom_violin() +
+  geom_point(position = position_jitterdodge(jitter.width = 0.3, jitter.height = 0, dodge.width = 0.9), alpha=0.5) +
+  geom_boxplot(width=0.1, position=dodge, outlier.colour = NA) +
+  theme_classic() + stat_compare_means(comparisons = list(c("methylated", "unmethylated")), size = 5, method="t.test") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        text = element_text(size=17)) + labs(y="Avg methylated frequency", fill="") + 
+  ggtitle("Methylation in SVA TSS") 
+
+
+# ggplot(methyl, aes(y=methylated_frequency, fill=group, x=group))+ 
+#   geom_boxplot(position=dodge, outlier.colour = NA) +
+#   theme_classic() + stat_compare_means(comparisons = list(c("methylated", "unmethylated")), size = 5) +
+#   theme(axis.title.x=element_blank(),
+#         axis.text.x=element_blank(),
+#         text = element_text(size=17)) + labs(fill="") + lims(y=c(NA, 1.3)) + facet_wrap(.~sva)
+```
+
