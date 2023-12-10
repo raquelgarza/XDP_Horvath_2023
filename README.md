@@ -31,4 +31,5 @@ This repository presents analyses for the manuscript
 	+ [**SNP_analysis.Rmd**](./src/r_scripts/SNP_analysis.Rmd) - R markdown for the visualization of the SNP analysis.
 	+ [**gene_DEA_experiments.Rmd**](./src/r_scripts/gene_DEA_experiments.Rmd) - Gene DEA.
 	+ [**TE_DEA_experiments.Rmd**](./src/r_scripts/TE_DEA_experiments.Rmd) - TE DEA.
+	+ [**methyl_SVAs_upreg_iPSCs_only.Rmd**](./src/r_scripts/methyl_SVAs_upreg_iPSCs_only.Rmd) - Methylation status of upregulated SVAs in iPSC --> NES.
 
